@@ -1,0 +1,31 @@
+[package]
+name = "mailcheck_lib"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85.0"            # Ex: "1.72.0" — remplacer par la MSRV décidée
+authors = ["Maxime Guillemin <guimaxali@gmail.com>"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/blastrider/mailcheck_lib"
+description = "Lib + CLI: validation du format d'adresses e-mail (RFC subset)."
+keywords = ["email","validator","rfc5322","punycode","cli"]
+categories = ["command-line-utilities","parsers","cryptography"]
+readme = "README.md"
+
+[dependencies]
+thiserror = "1.0"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1.0", optional = true, features = ["derive"] }
+serde_json = { version = "1.0", optional = true }
+tracing = { version = "0.1", optional = true }
+idna = "0.3"                      # punycode handling
+regex = "1.9"                     # local validation fallback
+
+[features]
+default = []
+serde = ["serde", "serde_json"]
+tracing = ["tracing"]
+
+[dev-dependencies]
+anyhow = "1.0"
+insta = { version = "1.29", optional = true }
+proptest = "1.0"
