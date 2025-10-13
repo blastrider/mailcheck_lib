@@ -43,6 +43,13 @@ pub(crate) fn check_domain(domain: &str, reasons: &mut Vec<String>) {
     }
 }
 
+/// Renvoie (domain_lower, ascii_domain) — ascii_domain vide si échec IDNA.
+pub(crate) fn normalize_domain(domain: &str) -> (String, String) {
+    let lower = domain.to_ascii_lowercase();
+    let ascii = idna::domain_to_ascii(&lower).unwrap_or_default();
+    (lower, ascii)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

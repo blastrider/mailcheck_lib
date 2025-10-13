@@ -1,10 +1,8 @@
 use anyhow::{Context, Result};
-use clap::CommandFactory; // << nécessaire pour Cli::command()
+use clap::CommandFactory;
 use clap::{Parser, Subcommand};
-use mailcheck_lib::{ValidationMode, ValidationReport, validate_email};
+use mailcheck_lib::{NormalizedEmail, ValidationMode, normalize_email};
 
-#[cfg(feature = "with-serde")]
-use std::fs::File;
 use std::io::{self, BufRead};
 
 #[derive(Parser)]
@@ -17,18 +15,27 @@ struct Cli {
     #[arg(long)]
     stdin: bool,
 
-    /// write JSON report to file (atomic) — nécessite feature `with-serde`
+    /// write report to file (JSON/NDJSON/CSV selon --format)
     #[arg(long)]
     out: Option<String>,
 
     /// mode: strict|relaxed
     #[arg(long, default_value = "strict")]
     mode: String,
+
+    /// format: human|json|ndjson|csv
+    #[arg(long, default_value = "human")]
+    format: String,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    Validate { email: String },
+    Validate {
+        /// mode: strict|relaxed (prend le pas sur l'option globale)
+        #[arg(long)]
+        mode: Option<String>,
+        email: String,
+    },
 }
 
 fn mode_from_str(s: &str) -> ValidationMode {
@@ -40,66 +47,153 @@ fn mode_from_str(s: &str) -> ValidationMode {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let mode = mode_from_str(&cli.mode);
-    let mut reports: Vec<ValidationReport> = Vec::new();
+    let mut mode = mode_from_str(&cli.mode);
+    let mut rows: Vec<NormalizedEmail> = Vec::new();
 
     if cli.stdin {
         for line in io::stdin().lock().lines() {
             let email = line.context("read stdin")?;
-            let r = validate_email(email.as_str(), mode)?;
-            reports.push(r);
+            let r = normalize_email(email.as_str(), mode)?;
+            rows.push(r);
         }
-    } else if let Some(Commands::Validate { email }) = cli.cmd {
-        let report = validate_email(&email, mode)?;
-        reports.push(report);
+    } else if let Some(Commands::Validate {
+        mode: sub_mode,
+        email,
+    }) = cli.cmd
+    {
+        if let Some(m) = sub_mode.as_deref() {
+            mode = mode_from_str(m); // la sous-commande a priorité
+        }
+        let r = normalize_email(&email, mode)?;
+        rows.push(r);
     } else {
-        // afficher l'aide si aucune commande fournie
         Cli::command().print_help()?;
         println!();
         return Ok(());
     }
 
-    if let Some(path) = cli.out {
-        // écriture atomique: tempfile + rename
-        #[cfg(feature = "with-serde")]
-        {
-            let tmp = format!("{}.tmp", path);
-            let f = File::create(&tmp).context("create temp report file")?;
-            serde_json::to_writer_pretty(f, &reports).context("write json report")?;
-            std::fs::rename(&tmp, &path).context("rename temp report file")?;
-        }
-        #[cfg(not(feature = "with-serde"))]
-        {
-            // <- on UTILISE 'path' ici: message explicite + validation du dossier
-            use std::path::Path;
-            let parent = Path::new(&path).parent().and_then(|p| {
-                if p.as_os_str().is_empty() {
-                    None
+    // sortie
+    match cli.format.as_str() {
+        "human" => {
+            for r in &rows {
+                if r.valid {
+                    println!("[OK]    {}", r.original);
                 } else {
-                    Some(p)
-                }
-            });
-            if let Some(dir) = parent {
-                if !dir.exists() {
-                    eprintln!(
-                        "--out: dossier inexistant pour le chemin fourni: '{}'",
-                        dir.display()
-                    );
+                    println!("[INVALID] {} :: {}", r.original, r.reasons.join("; "));
                 }
             }
-            eprintln!(
-                "--out demandé pour '{}' mais nécessite la feature 'with-serde'. \
-             Recompile : cargo run --features with-serde -- ...",
-                path
-            );
+        }
+        "json" => {
+            #[cfg(feature = "with-serde")]
+            {
+                let s = serde_json::to_string_pretty(&rows)?;
+                if let Some(path) = cli.out {
+                    write_all_atomically(&path, s.as_bytes())?;
+                } else {
+                    println!("{s}");
+                }
+            }
+            #[cfg(not(feature = "with-serde"))]
+            {
+                eprintln!("format=json nécessite la feature 'with-serde'");
+                std::process::exit(1);
+            }
+        }
+        "ndjson" => {
+            #[cfg(feature = "with-serde")]
+            {
+                if let Some(path) = &cli.out {
+                    let mut buf = Vec::new();
+                    for r in &rows {
+                        let line = serde_json::to_string(r)?;
+                        buf.extend_from_slice(line.as_bytes());
+                        buf.push(b'\n');
+                    }
+                    write_all_atomically(path, &buf)?;
+                } else {
+                    for r in &rows {
+                        println!("{}", serde_json::to_string(r)?);
+                    }
+                }
+            }
+            #[cfg(not(feature = "with-serde"))]
+            {
+                eprintln!("format=ndjson nécessite la feature 'with-serde'");
+                std::process::exit(1);
+            }
+        }
+        "csv" => {
+            #[cfg(feature = "with-csv")]
+            {
+                if let Some(path) = &cli.out {
+                    let mut wtr = csv::Writer::from_writer(Vec::new());
+                    for r in &rows {
+                        // On écrit des colonnes stables et lisibles
+                        let reasons = r.reasons.join("|");
+                        wtr.write_record([
+                            r.original.as_str(),
+                            r.local.as_str(),
+                            r.domain.as_str(),
+                            r.ascii_domain.as_str(),
+                            match r.mode {
+                                ValidationMode::Strict => "strict",
+                                ValidationMode::Relaxed => "relaxed",
+                            },
+                            if r.valid { "true" } else { "false" },
+                            reasons.as_str(),
+                        ])?;
+                    }
+                    let data = wtr.into_inner()?;
+                    write_all_atomically(path, &data)?;
+                } else {
+                    let mut wtr = csv::Writer::from_writer(std::io::stdout());
+                    for r in &rows {
+                        let reasons = r.reasons.join("|");
+                        wtr.write_record([
+                            r.original.as_str(),
+                            r.local.as_str(),
+                            r.domain.as_str(),
+                            r.ascii_domain.as_str(),
+                            match r.mode {
+                                ValidationMode::Strict => "strict",
+                                ValidationMode::Relaxed => "relaxed",
+                            },
+                            if r.valid { "true" } else { "false" },
+                            reasons.as_str(),
+                        ])?;
+                    }
+                    wtr.flush()?;
+                }
+            }
+            #[cfg(not(feature = "with-csv"))]
+            {
+                eprintln!("format=csv nécessite la feature 'with-csv'");
+                std::process::exit(1);
+            }
+        }
+        other => {
+            eprintln!("unknown --format '{}', use: human|json|ndjson|csv", other);
             std::process::exit(1);
         }
     }
 
-    // 0 = tout OK, 2 = invalids, 1 = fatal (on n'utilise 1 que si erreurs I/O/CLI)
-    let any_invalid = reports.iter().any(|r| !r.ok);
+    // codes de sortie : 0 OK, 2 invalids, 1 fatal
+    let any_invalid = rows.iter().any(|r| !r.valid);
     if any_invalid {
         std::process::exit(2);
     }
+    Ok(())
+}
+
+#[cfg(any(feature = "with-serde", feature = "with-csv"))]
+fn write_all_atomically(path: &str, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let tmp = format!("{}.tmp", path);
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)?;
     Ok(())
 }

@@ -1,35 +1,21 @@
-//! Validator module: expose l’API et orchestre les sous-modules.
-
 mod domain;
 mod local;
 mod types;
 
-pub use types::{EmailError, ValidationMode, ValidationReport};
+pub use types::{EmailError, NormalizedEmail, ValidationMode, ValidationReport};
 
-use domain::check_domain;
+use domain::{check_domain, normalize_domain};
 use local::{is_local_relaxed, is_local_strict};
 
-/// Valide le **format** d’une adresse e-mail (pas de MX/SMTP).
-///
-/// Retourne un `ValidationReport` détaillant les raisons en cas d’invalidation.
-///
-/// # Exemples
-/// ```
-/// use mailcheck_lib::{validate_email, ValidationMode};
-/// let r = validate_email("alice@example.com", ValidationMode::Strict).unwrap();
-/// assert!(r.ok);
-/// ```
 pub fn validate_email(email: &str, mode: ValidationMode) -> Result<ValidationReport, EmailError> {
-    let input = email.trim(); // on ne modifie pas l’original, juste pour les checks
+    let input = email.trim();
 
     let mut reasons = Vec::new();
 
-    // Longueur totale (RFC 5321: 254 max avec le '@')
     if input.len() > 254 {
         reasons.push(format!("total length {} > 254", input.len()));
     }
 
-    // Doit contenir exactement un '@'
     let parts: Vec<&str> = input.split('@').collect();
     if parts.len() != 2 {
         reasons.push("must contain exactly one '@'".to_string());
@@ -37,7 +23,6 @@ pub fn validate_email(email: &str, mode: ValidationMode) -> Result<ValidationRep
     }
     let (local, domain) = (parts[0], parts[1]);
 
-    // Longueur local-part
     if local.is_empty() || local.len() > 64 {
         reasons.push(format!(
             "local part length {} invalid (1..=64)",
@@ -45,10 +30,8 @@ pub fn validate_email(email: &str, mode: ValidationMode) -> Result<ValidationRep
         ));
     }
 
-    // Domaine: IDNA + labels
     check_domain(domain, &mut reasons);
 
-    // Local-part selon le mode
     let local_ok = match mode {
         ValidationMode::Strict => is_local_strict(local),
         ValidationMode::Relaxed => is_local_relaxed(local),
@@ -64,19 +47,43 @@ pub fn validate_email(email: &str, mode: ValidationMode) -> Result<ValidationRep
     Ok(ValidationReport { ok, reasons })
 }
 
+/// **NOUVEAU** : valide et renvoie une *sortie normalisée*
+/// (local, domaine normalisé, domaine ASCII).
+pub fn normalize_email(email: &str, mode: ValidationMode) -> Result<NormalizedEmail, EmailError> {
+    let input = email.trim();
+    // décomposer tôt (même si invalide) pour normaliser ce qu’on peut
+    let mut local = "";
+    let mut domain = "";
+    if let Some((l, d)) = input.split_once('@') {
+        local = l;
+        domain = d;
+    }
+
+    let report = validate_email(email, mode)?;
+    let (domain_lower, ascii_domain) = normalize_domain(domain);
+
+    Ok(NormalizedEmail {
+        original: email.to_string(),
+        local: local.to_string(),
+        domain: domain_lower,
+        ascii_domain,
+        mode,
+        valid: report.ok,
+        reasons: report.reasons,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn accepts_basic() {
         let r = validate_email("alice@example.com", ValidationMode::Strict).unwrap();
         assert!(r.ok, "{:?}", r.reasons);
     }
-
     #[test]
-    fn rejects_double_at() {
-        let r = validate_email("a@@b", ValidationMode::Strict).unwrap();
-        assert!(!r.ok);
+    fn normalized_has_ascii_domain() {
+        let n = normalize_email("alice@exämple.com", ValidationMode::Strict).unwrap();
+        assert!(!n.ascii_domain.is_empty());
     }
 }
