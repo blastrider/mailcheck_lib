@@ -12,20 +12,20 @@ categories = ["command-line-utilities","parsers","cryptography"]
 readme = "README.md"
 
 [dependencies]
-thiserror = "1.0"
-clap = { version = "4", features = ["derive"] }
-serde = { version = "1.0", optional = true, features = ["derive"] }
-serde_json = { version = "1.0", optional = true }
-tracing = { version = "0.1", optional = true }
-idna = "0.3"                      # punycode handling
-regex = "1.9"                     # local validation fallback
+thiserror   = "1.0"
+anyhow      = "1.0"          # << binaire en a besoin -> DEP normale
+clap        = { version = "4", features = ["derive"] }
+idna        = "0.3"
+regex       = "1.9"
+serde       = { version = "1.0", optional = true, features = ["derive"] }
+serde_json  = { version = "1.0", optional = true }
+tracing     = { version = "0.1", optional = true }
 
 [features]
-default = []
-serde = ["serde", "serde_json"]
-tracing = ["tracing"]
+default      = []
+with-serde   = ["serde", "serde_json"]   # active JSON
+with-tracing = ["tracing"]               # active logs
 
 [dev-dependencies]
-anyhow = "1.0"
-insta = { version = "1.29", optional = true }
-proptest = "1.0"
+insta     = "1.29"
+proptest  = "1.0"
