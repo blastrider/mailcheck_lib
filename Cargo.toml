@@ -32,6 +32,7 @@ with-serde   = ["serde", "serde_json"]   # active JSON
 with-tracing = ["tracing"]               # active logs
 with-csv     = ["with-serde", "csv"] 
 with-mx      = ["trust-dns-resolver"]
+with-auth-records = ["trust-dns-resolver"]
 
 [dev-dependencies]
 insta     = "1.29"
