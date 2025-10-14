@@ -5,6 +5,7 @@ Ce projet fournit :
 
 - une API (`mailcheck_lib`) pour valider un e‑mail, produire une version normalisée (domaine en ASCII/IDNA) et détecter les caractères spéciaux susceptibles d’induire en erreur ;
 - une fonction `check_mx` (feature `with-mx`) pour résoudre les enregistrements MX d’un domaine ;
+- une fonction `check_auth_records` (feature `with-auth-records`) pour auditer SPF, DKIM et DMARC ;
 - un binaire `mailcheck-cli` pour traiter des adresses depuis la ligne de commande, des fichiers ou des flux (`stdin`).
 
 ## Compilation
@@ -43,6 +44,9 @@ Options de détection de caractères spéciaux (spéculation typosquatting)
     --spec-json                 Affiche le bloc SpecCharacters (JSON par ligne)
     --ascii-hint                Force la génération d’un hint ASCII (même sans spec-chars)
     --mx                        Résout les enregistrements MX (feature with-mx)
+    --auth                      Vérifie SPF/DKIM/DMARC (feature with-auth-records)
+    --dkim-selector <NAME>      Ajoute un sélecteur DKIM (répéter l’option)
+    --skip-dkim-policy          Ignore l’enregistrement _domainkey (feature with-auth-records)
 
 Commandes
     validate [--mode <...>] <EMAIL>
@@ -64,6 +68,8 @@ Commandes
   `has_confusables`, `has_diacritics`, `has_mixed_scripts`, `spec_notes`, `ascii_hint`.
   Avec `--mx`, deux colonnes supplémentaires (`mx_status`, `mx_detail`) décrivent
   la résolution MX.
+  Avec `--auth`, six colonnes (`auth_spf`, `auth_dmarc`, `auth_dkim_policy`,
+  `auth_selectors`, `auth_error`, `auth_skipped`) exposent le résumé des politiques publiées.
 
 ### Analyse de caractères spéciaux (`--spec-chars`)
 
@@ -121,6 +127,7 @@ mailcheck-cli --stdin --spec-chars --spec-json < addresses.txt
 | `has_*`            | Récap booléen (Option) selon les dettes detectées                           |
 | `spec_notes`       | Concat `segment:note` (Ordre stable)                                         |
 | `ascii_hint`       | Suggestion ASCII lisible (`Option<String>`)                                  |
+| `auth`             | Résumé SPF/DKIM/DMARC (`null` si non demandé)                                |
 | `mx`               | Résultat MX (`status`, `error` ou `skipped`) quand `--mx` est activé         |
 
 ### Utilisation depuis la bibliothèque
@@ -173,6 +180,62 @@ cargo run --features with-mx -- --stdin --mx < domains.txt
 Les sorties `json`/`ndjson` ajoutent un champ `mx` (contenant `status`, `error`
 ou `skipped`). Le CSV expose deux colonnes (`mx_status`, `mx_detail`) quand
 `--mx` est présent.
+
+### Vérification SPF / DKIM / DMARC (`with-auth-records`)
+
+Activez la feature `with-auth-records` pour interroger les enregistrements TXT pertinents
+et obtenir un état synthétique :
+
+- SPF — détecte l’absence de politique, les redirections, les enregistrements multiples ou une politique trop permissive (`SpfStatus`).
+- DMARC — vérifie la présence d’un enregistrement valide, identifie les politiques faibles (`none`, `quarantine`) et signale les cas invalides (`DmarcStatus`).
+- DKIM — inspecte le _policy record_ (`_domainkey`) et une liste de sélecteurs fournis (`AuthLookupOptions`), en mettant en avant les clés de test ou les anomalies détectées (`DkimStatus`).
+
+#### Depuis la CLI
+
+Compilez le binaire avec la feature :
+
+```bash
+cargo run --features "with-auth-records" -- --stdin --auth < domains.txt
+```
+
+Ajoutez autant de sélecteurs DKIM que nécessaire :
+
+```bash
+cargo run --features "with-auth-records" -- \
+  --stdin --auth \
+  --dkim-selector default \
+  --dkim-selector transactionnel \
+  < domains.txt
+```
+
+`--auth` enrichit les sorties `human`, `json`, `ndjson` et `csv` avec un bloc `auth`
+(`spf`, `dmarc`, `dkim_policy`, `selectors`, erreurs ou raisons de skip). Utilisez
+`--skip-dkim-policy` si vous voulez ignorer l’enregistrement `_domainkey`.
+
+```rust
+use mailcheck_lib::{
+    AuthLookupOptions,
+    SpfStatus,
+    check_auth_records_with_options,
+};
+
+let options = AuthLookupOptions::new()
+    .with_dkim_selector("default")
+    .with_dkim_selector("transactional");
+
+let status = check_auth_records_with_options("example.com", &options)?;
+
+match status.spf {
+    SpfStatus::Compliant { qualifier, .. } => println!("SPF ok ({qualifier:?})"),
+    other => println!("SPF à examiner: {other:?}"),
+}
+
+println!("DMARC: {:?}", status.dmarc);
+println!("DKIM policy: {:?}", status.dkim.policy);
+println!("DKIM selectors: {:?}", status.dkim.selectors);
+```
+
+La fonction `check_auth_records` utilise les options par défaut (pas de sélecteurs supplémentaires). Chaque statut est sérialisable (`Debug`) pour inspection et peut être converti en reporting applicatif.
 
 ## Contribution
 
