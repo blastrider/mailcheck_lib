@@ -922,7 +922,7 @@ fn main() -> Result<()> {
 }
 
 fn make_row(normalized: NormalizedEmail, cli: &Cli) -> OutputRow {
-    let mut row = OutputRow {
+    let row = OutputRow {
         normalized,
         #[cfg(feature = "with-mx")]
         mx: None,
