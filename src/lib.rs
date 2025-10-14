@@ -17,3 +17,8 @@ pub use validator::{
     validate_email,
     validate_email_with_spec,
 };
+
+#[cfg(feature = "with-mx")]
+pub mod mx;
+#[cfg(feature = "with-mx")]
+pub use mx::{Error as MxError, MxRecord, MxStatus, check_mx};

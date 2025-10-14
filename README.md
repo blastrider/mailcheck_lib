@@ -4,6 +4,7 @@ Bibliothèque et CLI en Rust pour vérifier et normaliser des adresses e‑mail.
 Ce projet fournit :
 
 - une API (`mailcheck_lib`) pour valider un e‑mail, produire une version normalisée (domaine en ASCII/IDNA) et détecter les caractères spéciaux susceptibles d’induire en erreur ;
+- une fonction `check_mx` (feature `with-mx`) pour résoudre les enregistrements MX d’un domaine ;
 - un binaire `mailcheck-cli` pour traiter des adresses depuis la ligne de commande, des fichiers ou des flux (`stdin`).
 
 ## Compilation
@@ -41,6 +42,7 @@ Options de détection de caractères spéciaux (spéculation typosquatting)
                                 Choix du profil de détection (défaut standard)
     --spec-json                 Affiche le bloc SpecCharacters (JSON par ligne)
     --ascii-hint                Force la génération d’un hint ASCII (même sans spec-chars)
+    --mx                        Résout les enregistrements MX (feature with-mx)
 
 Commandes
     validate [--mode <...>] <EMAIL>
@@ -58,8 +60,10 @@ Commandes
 - `json` : sérialise le tableau de résultats (requiert la feature `with-serde`).
 - `ndjson` : une ligne JSON par adresse (feature `with-serde`).
 - `csv` : colonnes stables (feature `with-csv`).  
-  Ajoute, lorsque `--spec-chars` est actif, les colonnes :
+  Ajoute, lorsque `--spec-chars` est actif, les colonnes
   `has_confusables`, `has_diacritics`, `has_mixed_scripts`, `spec_notes`, `ascii_hint`.
+  Avec `--mx`, deux colonnes supplémentaires (`mx_status`, `mx_detail`) décrivent
+  la résolution MX.
 
 ### Analyse de caractères spéciaux (`--spec-chars`)
 
@@ -117,6 +121,7 @@ mailcheck-cli --stdin --spec-chars --spec-json < addresses.txt
 | `has_*`            | Récap booléen (Option) selon les dettes detectées                           |
 | `spec_notes`       | Concat `segment:note` (Ordre stable)                                         |
 | `ascii_hint`       | Suggestion ASCII lisible (`Option<String>`)                                  |
+| `mx`               | Résultat MX (`status`, `error` ou `skipped`) quand `--mx` est activé         |
 
 ### Utilisation depuis la bibliothèque
 
@@ -139,6 +144,35 @@ Les fonctions principales :
 - `validate_email_with_spec(email, mode, opts)` : validation + analyse spéciaux.
 - `normalize_email(email, mode)` : version normalisée de l’adresse.
 - `normalize_email_with_spec(email, mode, opts)` : normalisation + analyse spéciaux.
+
+### Résolution MX (`with-mx`)
+
+Activez la feature `with-mx` pour exposer `check_mx(domain: &str)` et l’option
+CLI `--mx`. La fonction renvoie un `MxStatus` :
+
+- `MxStatus::Records(Vec<MxRecord>)` si des enregistrements MX sont trouvés (triés par priorité).
+- `MxStatus::NoRecords` si aucun MX n’est publié.
+
+Exemple :
+
+```rust
+use mailcheck_lib::{check_mx, MxStatus};
+
+match check_mx("example.com")? {
+    MxStatus::Records(records) => println!("{} serveurs MX", records.len()),
+    MxStatus::NoRecords => println!("pas de MX déclarés"),
+}
+```
+
+Depuis le CLI :
+
+```bash
+cargo run --features with-mx -- --stdin --mx < domains.txt
+```
+
+Les sorties `json`/`ndjson` ajoutent un champ `mx` (contenant `status`, `error`
+ou `skipped`). Le CSV expose deux colonnes (`mx_status`, `mx_detail`) quand
+`--mx` est présent.
 
 ## Contribution
 
