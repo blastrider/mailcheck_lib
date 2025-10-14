@@ -15,7 +15,7 @@ readme = "README.md"
 thiserror   = "1.0"
 anyhow      = "1.0"          # << binaire en a besoin -> DEP normale
 clap        = { version = "4", features = ["derive"] }
-idna        = "0.3"
+idna        = "1.0"
 regex       = "1.9"
 serde       = { version = "1.0", optional = true, features = ["derive"] }
 serde_json  = { version = "1.0", optional = true }
