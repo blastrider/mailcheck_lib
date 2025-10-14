@@ -922,7 +922,10 @@ fn main() -> Result<()> {
 }
 
 fn make_row(normalized: NormalizedEmail, cli: &Cli) -> OutputRow {
-    let row = OutputRow {
+    #[cfg(not(any(feature = "with-mx", feature = "with-auth-records")))]
+    let _ = cli;
+
+    let mut row = OutputRow {
         normalized,
         #[cfg(feature = "with-mx")]
         mx: None,
