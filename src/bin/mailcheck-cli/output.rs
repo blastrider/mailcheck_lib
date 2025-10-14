@@ -45,7 +45,7 @@ impl OutputRow {
 
 #[cfg_attr(
     not(any(feature = "with-mx", feature = "with-auth-records")),
-    allow(unused_variables)
+    allow(unused_variables, unused_mut)
 )]
 pub fn make_row(normalized: NormalizedEmail, cli: &Cli) -> OutputRow {
     let mut row = OutputRow::new(normalized);
