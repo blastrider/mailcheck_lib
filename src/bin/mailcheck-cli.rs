@@ -3,7 +3,7 @@ mod args;
 #[cfg(feature = "with-auth-records")]
 #[path = "mailcheck-cli/auth.rs"]
 mod auth;
-#[cfg(feature = "with-mx")]
+#[cfg(feature = "with-smtp-verify")]
 #[path = "mailcheck-cli/deliverability.rs"]
 mod deliverability;
 #[cfg(feature = "with-mx")]
@@ -11,6 +11,9 @@ mod deliverability;
 mod mx;
 #[path = "mailcheck-cli/output.rs"]
 mod output;
+#[cfg(feature = "with-smtp-verify")]
+#[path = "mailcheck-cli/verify.rs"]
+mod verify;
 
 use anyhow::{Context, Result};
 use args::{Cli, Commands, mode_from_str, spec_options_from_profile};
@@ -39,16 +42,45 @@ fn main() -> Result<()> {
 
     if cli.stdin {
         collect_from_stdin(&cli, mode, &mut rows, spec_options.as_ref())?;
-    } else if let Some(Commands::Validate {
-        mode: sub_mode,
-        email,
-    }) = &cli.cmd
-    {
-        if let Some(selected) = sub_mode.as_deref() {
-            mode = mode_from_str(selected);
+    } else if let Some(cmd) = &cli.cmd {
+        match cmd {
+            Commands::Validate {
+                mode: sub_mode,
+                email,
+            } => {
+                if let Some(selected) = sub_mode.as_deref() {
+                    mode = mode_from_str(selected);
+                }
+                let normalized = normalize_entry(email.as_str(), mode, spec_options.as_ref())?;
+                rows.push(make_row(normalized, &cli));
+            }
+            #[cfg(feature = "with-smtp-verify")]
+            Commands::VerifyExists {
+                email,
+                format,
+                helo,
+                mail_from,
+                require_starttls,
+                catchall_probes,
+                max_mx,
+                timeout_ms,
+                ipv6,
+            } => {
+                let config = verify::VerifyConfig {
+                    email,
+                    format,
+                    helo: helo.as_deref(),
+                    mail_from: mail_from.as_deref(),
+                    require_starttls: *require_starttls,
+                    catchall_probes: *catchall_probes,
+                    max_mx: *max_mx,
+                    timeout_ms: *timeout_ms,
+                    ipv6: *ipv6,
+                };
+                verify::run_verify_exists(config)?;
+                return Ok(());
+            }
         }
-        let normalized = normalize_entry(email.as_str(), mode, spec_options.as_ref())?;
-        rows.push(make_row(normalized, &cli));
     } else {
         args::Cli::clap_command().print_help()?;
         println!();

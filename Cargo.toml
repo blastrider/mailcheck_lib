@@ -25,6 +25,8 @@ unicode-normalization = "0.1"
 unicode-script = "0.5"
 phf = { version = "0.11", features = ["macros"] }
 trust-dns-resolver = { version = "0.23", optional = true }
+native-tls = { version = "0.2", optional = true }
+rand = { version = "0.8", optional = true }
 
 [features]
 default      = []
@@ -32,6 +34,7 @@ with-serde   = ["serde", "serde_json"]   # active JSON
 with-tracing = ["tracing"]               # active logs
 with-csv     = ["with-serde", "csv"] 
 with-mx      = ["trust-dns-resolver"]
+with-smtp-verify = ["trust-dns-resolver", "native-tls", "rand"]
 with-auth-records = ["trust-dns-resolver"]
 
 [dev-dependencies]
