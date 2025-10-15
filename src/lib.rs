@@ -21,7 +21,11 @@ pub use validator::{
 #[cfg(feature = "with-mx")]
 pub mod mx;
 #[cfg(feature = "with-mx")]
-pub use mx::{Error as MxError, MxRecord, MxStatus, check_mx};
+pub use mx::{
+    AttemptOutcome, AttemptStage, DeliverabilityError, Error as MxError, MailboxCheckOptions,
+    MailboxStatus, MailboxVerification, MxRecord, MxStatus, ServerAttempt, SmtpEvent, SmtpReply,
+    VerificationMethod, check_mailaddress_exists, check_mailaddress_exists_with_options, check_mx,
+};
 
 #[cfg(feature = "with-auth-records")]
 pub mod auth;

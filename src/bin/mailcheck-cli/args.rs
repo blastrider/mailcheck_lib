@@ -45,6 +45,11 @@ pub struct Cli {
     #[arg(long)]
     pub mx: bool,
 
+    /// teste la délivrabilité SMTP (feature `with-mx`)
+    #[cfg(feature = "with-mx")]
+    #[arg(long)]
+    pub deliverability: bool,
+
     /// vérifie les enregistrements SPF/DKIM/DMARC (feature `with-auth-records`)
     #[cfg(feature = "with-auth-records")]
     #[arg(long)]

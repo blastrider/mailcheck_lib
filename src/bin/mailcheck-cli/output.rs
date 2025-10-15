@@ -12,10 +12,14 @@ use crate::auth::AuthCsvFields;
 #[cfg(feature = "with-auth-records")]
 use crate::auth::AuthSummary;
 #[cfg(feature = "with-mx")]
+use crate::deliverability::DeliverabilitySummary;
+#[cfg(feature = "with-mx")]
 use crate::mx::MxSummary;
 
 #[cfg(feature = "with-auth-records")]
 use crate::auth;
+#[cfg(feature = "with-mx")]
+use crate::deliverability;
 #[cfg(feature = "with-mx")]
 use crate::mx;
 
@@ -26,6 +30,9 @@ pub struct OutputRow {
     #[cfg(feature = "with-mx")]
     #[cfg_attr(feature = "with-serde", serde(skip_serializing_if = "Option::is_none"))]
     pub mx: Option<MxSummary>,
+    #[cfg(feature = "with-mx")]
+    #[cfg_attr(feature = "with-serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub deliverability: Option<DeliverabilitySummary>,
     #[cfg(feature = "with-auth-records")]
     #[cfg_attr(feature = "with-serde", serde(skip_serializing_if = "Option::is_none"))]
     pub auth: Option<AuthSummary>,
@@ -37,6 +44,8 @@ impl OutputRow {
             normalized,
             #[cfg(feature = "with-mx")]
             mx: None,
+            #[cfg(feature = "with-mx")]
+            deliverability: None,
             #[cfg(feature = "with-auth-records")]
             auth: None,
         }
@@ -53,6 +62,11 @@ pub fn make_row(normalized: NormalizedEmail, cli: &Cli) -> OutputRow {
     #[cfg(feature = "with-mx")]
     if cli.mx {
         row.mx = Some(mx::resolve(&row.normalized));
+    }
+
+    #[cfg(feature = "with-mx")]
+    if cli.deliverability {
+        row.deliverability = Some(deliverability::probe(&row.normalized));
     }
 
     #[cfg(feature = "with-auth-records")]
@@ -121,6 +135,11 @@ fn write_human(rows: &[OutputRow], cli: &Cli) -> Result<()> {
         #[cfg(feature = "with-mx")]
         if let Some(mx) = &row.mx {
             println!("        mx: {}", mx.human_summary());
+        }
+
+        #[cfg(feature = "with-mx")]
+        if let Some(deliv) = &row.deliverability {
+            println!("        smtp: {}", deliv.human_summary());
         }
 
         #[cfg(feature = "with-auth-records")]
@@ -239,6 +258,17 @@ fn csv_record(row: &OutputRow, cli: &Cli) -> Vec<String> {
             .mx
             .as_ref()
             .map(|mx| mx.csv_fields())
+            .unwrap_or_else(|| (String::new(), String::new()));
+        record.push(status);
+        record.push(detail);
+    }
+
+    #[cfg(feature = "with-mx")]
+    if cli.deliverability {
+        let (status, detail) = row
+            .deliverability
+            .as_ref()
+            .map(|summary| summary.csv_fields())
             .unwrap_or_else(|| (String::new(), String::new()));
         record.push(status);
         record.push(detail);

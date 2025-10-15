@@ -5,6 +5,7 @@ Ce projet fournit :
 
 - une API (`mailcheck_lib`) pour valider un e‑mail, produire une version normalisée (domaine en ASCII/IDNA) et détecter les caractères spéciaux susceptibles d’induire en erreur ;
 - une fonction `check_mx` (feature `with-mx`) pour résoudre les enregistrements MX d’un domaine ;
+- une fonction `check_mailaddress_exists` (feature `with-mx`) pour sonder la délivrabilité SMTP sans envoyer de message ;
 - une fonction `check_auth_records` (feature `with-auth-records`) pour auditer SPF, DKIM et DMARC ;
 - un binaire `mailcheck-cli` pour traiter des adresses depuis la ligne de commande, des fichiers ou des flux (`stdin`).
 
@@ -44,6 +45,7 @@ Options de détection de caractères spéciaux (spéculation typosquatting)
     --spec-json                 Affiche le bloc SpecCharacters (JSON par ligne)
     --ascii-hint                Force la génération d’un hint ASCII (même sans spec-chars)
     --mx                        Résout les enregistrements MX (feature with-mx)
+    --deliverability            Teste la délivrabilité SMTP (feature with-mx)
     --auth                      Vérifie SPF/DKIM/DMARC (feature with-auth-records)
     --dkim-selector <NAME>      Ajoute un sélecteur DKIM (répéter l’option)
     --skip-dkim-policy          Ignore l’enregistrement _domainkey (feature with-auth-records)
@@ -68,6 +70,8 @@ Commandes
   `has_confusables`, `has_diacritics`, `has_mixed_scripts`, `spec_notes`, `ascii_hint`.
   Avec `--mx`, deux colonnes supplémentaires (`mx_status`, `mx_detail`) décrivent
   la résolution MX.
+  Avec `--deliverability`, deux colonnes (`deliverability_status`, `deliverability_detail`)
+  résument le test SMTP (délivrable, rejet, refus temporaire…).
   Avec `--auth`, six colonnes (`auth_spf`, `auth_dmarc`, `auth_dkim_policy`,
   `auth_selectors`, `auth_error`, `auth_skipped`) exposent le résumé des politiques publiées.
 
@@ -129,6 +133,7 @@ mailcheck-cli --stdin --spec-chars --spec-json < addresses.txt
 | `ascii_hint`       | Suggestion ASCII lisible (`Option<String>`)                                  |
 | `auth`             | Résumé SPF/DKIM/DMARC (`null` si non demandé)                                |
 | `mx`               | Résultat MX (`status`, `error` ou `skipped`) quand `--mx` est activé         |
+| `deliverability`   | Résultat du test SMTP (`verification`, `error` ou `skipped`)                 |
 
 ### Utilisation depuis la bibliothèque
 
@@ -180,6 +185,39 @@ cargo run --features with-mx -- --stdin --mx < domains.txt
 Les sorties `json`/`ndjson` ajoutent un champ `mx` (contenant `status`, `error`
 ou `skipped`). Le CSV expose deux colonnes (`mx_status`, `mx_detail`) quand
 `--mx` est présent.
+
+### Délivrabilité SMTP (`with-mx`)
+
+La même feature `with-mx` expose `check_mailaddress_exists(email: &str)` qui ouvre
+une session SMTP, interroge les serveurs MX et signale si l’adresse serait acceptée
+(`MailboxStatus::Deliverable`), rejetée (`Rejected` / `TemporaryFailure`) ou si la
+vérification est inconclusive (`NoMailServer`, `Unreachable`, `Unverified`). Le
+rapport détaillé (`MailboxVerification`) inclut chaque tentative (`ServerAttempt`)
+et toutes les réponses SMTP.
+
+Exemple :
+
+```rust
+use mailcheck_lib::{check_mailaddress_exists, MailboxStatus};
+
+let report = check_mailaddress_exists("alice@example.com")?;
+
+match report.status {
+    MailboxStatus::Deliverable => println!("SMTP OK"),
+    MailboxStatus::Rejected { code, message } => println!("Rejected: {code} {message}"),
+    other => println!("Verification inconclusive: {other}"),
+}
+```
+
+Depuis la CLI :
+
+```bash
+cargo run --features with-mx -- --stdin --deliverability < emails.txt
+```
+
+Le champ `deliverability` est ajouté aux formats `json`/`ndjson` et `human`. En
+CSV, les colonnes `deliverability_status` / `deliverability_detail` synthétisent
+le résultat.
 
 ### Vérification SPF / DKIM / DMARC (`with-auth-records`)
 
