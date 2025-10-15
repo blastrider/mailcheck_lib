@@ -4,6 +4,9 @@ mod args;
 #[path = "mailcheck-cli/auth.rs"]
 mod auth;
 #[cfg(feature = "with-mx")]
+#[path = "mailcheck-cli/deliverability.rs"]
+mod deliverability;
+#[cfg(feature = "with-mx")]
 #[path = "mailcheck-cli/mx.rs"]
 mod mx;
 #[path = "mailcheck-cli/output.rs"]
