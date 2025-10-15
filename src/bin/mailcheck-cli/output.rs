@@ -11,14 +11,14 @@ use mailcheck_lib::ValidationMode;
 use crate::auth::AuthCsvFields;
 #[cfg(feature = "with-auth-records")]
 use crate::auth::AuthSummary;
-#[cfg(feature = "with-mx")]
+#[cfg(feature = "with-smtp-verify")]
 use crate::deliverability::DeliverabilitySummary;
 #[cfg(feature = "with-mx")]
 use crate::mx::MxSummary;
 
 #[cfg(feature = "with-auth-records")]
 use crate::auth;
-#[cfg(feature = "with-mx")]
+#[cfg(feature = "with-smtp-verify")]
 use crate::deliverability;
 #[cfg(feature = "with-mx")]
 use crate::mx;
@@ -30,7 +30,7 @@ pub struct OutputRow {
     #[cfg(feature = "with-mx")]
     #[cfg_attr(feature = "with-serde", serde(skip_serializing_if = "Option::is_none"))]
     pub mx: Option<MxSummary>,
-    #[cfg(feature = "with-mx")]
+    #[cfg(feature = "with-smtp-verify")]
     #[cfg_attr(feature = "with-serde", serde(skip_serializing_if = "Option::is_none"))]
     pub deliverability: Option<DeliverabilitySummary>,
     #[cfg(feature = "with-auth-records")]
@@ -44,7 +44,7 @@ impl OutputRow {
             normalized,
             #[cfg(feature = "with-mx")]
             mx: None,
-            #[cfg(feature = "with-mx")]
+            #[cfg(feature = "with-smtp-verify")]
             deliverability: None,
             #[cfg(feature = "with-auth-records")]
             auth: None,
@@ -64,7 +64,7 @@ pub fn make_row(normalized: NormalizedEmail, cli: &Cli) -> OutputRow {
         row.mx = Some(mx::resolve(&row.normalized));
     }
 
-    #[cfg(feature = "with-mx")]
+    #[cfg(feature = "with-smtp-verify")]
     if cli.deliverability {
         row.deliverability = Some(deliverability::probe(&row.normalized));
     }
@@ -137,7 +137,7 @@ fn write_human(rows: &[OutputRow], cli: &Cli) -> Result<()> {
             println!("        mx: {}", mx.human_summary());
         }
 
-        #[cfg(feature = "with-mx")]
+        #[cfg(feature = "with-smtp-verify")]
         if let Some(deliv) = &row.deliverability {
             println!("        smtp: {}", deliv.human_summary());
         }
@@ -263,7 +263,7 @@ fn csv_record(row: &OutputRow, cli: &Cli) -> Vec<String> {
         record.push(detail);
     }
 
-    #[cfg(feature = "with-mx")]
+    #[cfg(feature = "with-smtp-verify")]
     if cli.deliverability {
         let (status, detail) = row
             .deliverability

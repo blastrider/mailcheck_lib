@@ -5,7 +5,7 @@ Ce projet fournit :
 
 - une API (`mailcheck_lib`) pour valider un e‑mail, produire une version normalisée (domaine en ASCII/IDNA) et détecter les caractères spéciaux susceptibles d’induire en erreur ;
 - une fonction `check_mx` (feature `with-mx`) pour résoudre les enregistrements MX d’un domaine ;
-- une fonction `check_mailaddress_exists` (feature `with-mx`) pour sonder la délivrabilité SMTP sans envoyer de message ;
+ - une fonction `check_mailaddress_exists` (feature `with-smtp-verify`) pour sonder la délivrabilité SMTP sans envoyer de message ;
 - une fonction `check_auth_records` (feature `with-auth-records`) pour auditer SPF, DKIM et DMARC ;
 - un binaire `mailcheck-cli` pour traiter des adresses depuis la ligne de commande, des fichiers ou des flux (`stdin`).
 
@@ -45,7 +45,7 @@ Options de détection de caractères spéciaux (spéculation typosquatting)
     --spec-json                 Affiche le bloc SpecCharacters (JSON par ligne)
     --ascii-hint                Force la génération d’un hint ASCII (même sans spec-chars)
     --mx                        Résout les enregistrements MX (feature with-mx)
-    --deliverability            Teste la délivrabilité SMTP (feature with-mx)
+    --deliverability            Teste la délivrabilité SMTP (feature with-smtp-verify)
     --auth                      Vérifie SPF/DKIM/DMARC (feature with-auth-records)
     --dkim-selector <NAME>      Ajoute un sélecteur DKIM (répéter l’option)
     --skip-dkim-policy          Ignore l’enregistrement _domainkey (feature with-auth-records)
@@ -53,6 +53,8 @@ Options de détection de caractères spéciaux (spéculation typosquatting)
 Commandes
     validate [--mode <...>] <EMAIL>
                                 Valide une adresse unique (prioritaire sur --mode global)
+    verify-exists <EMAIL> [options]
+                                Vérifie l'existence via SMTP (feature with-smtp-verify)
 ```
 
 ### Modes de validation
@@ -114,6 +116,9 @@ mailcheck-cli --stdin --format csv --out report.csv \
 
 # Voir uniquement le bloc SpecCharacters pour inspection
 mailcheck-cli --stdin --spec-chars --spec-json < addresses.txt
+
+# Vérifier l'existence SMTP d'une adresse précise
+mailcheck-cli verify-exists alice@example.com --timeout 7000 --format human
 ```
 
 ### Champs renvoyés (formats structurés)
@@ -186,38 +191,51 @@ Les sorties `json`/`ndjson` ajoutent un champ `mx` (contenant `status`, `error`
 ou `skipped`). Le CSV expose deux colonnes (`mx_status`, `mx_detail`) quand
 `--mx` est présent.
 
-### Délivrabilité SMTP (`with-mx`)
+### Délivrabilité SMTP (`with-smtp-verify`)
 
-La même feature `with-mx` expose `check_mailaddress_exists(email: &str)` qui ouvre
-une session SMTP, interroge les serveurs MX et signale si l’adresse serait acceptée
-(`MailboxStatus::Deliverable`), rejetée (`Rejected` / `TemporaryFailure`) ou si la
-vérification est inconclusive (`NoMailServer`, `Unreachable`, `Unverified`). Le
-rapport détaillé (`MailboxVerification`) inclut chaque tentative (`ServerAttempt`)
-et toutes les réponses SMTP.
+Activez la feature `with-smtp-verify` pour établir une véritable session SMTP
+(`EHLO` → `STARTTLS` si disponible → `MAIL FROM` → `RCPT TO`) et classifier la
+réponse en [`Existence`]. La fonction principale est
+`check_mailaddress_exists(addr, options)` où `options` est un
+[`SmtpProbeOptions`] configurable (MX maximum, timeout, enveloppe, STARTTLS,
+tests catch-all…). Le rapport [`SmtpProbeReport`] fournit le verdict, le score
+de confiance et la transcription complète.
 
 Exemple :
 
 ```rust
-use mailcheck_lib::{check_mailaddress_exists, MailboxStatus};
+use mailcheck_lib::{check_mailaddress_exists, Existence, SmtpProbeOptions};
 
-let report = check_mailaddress_exists("alice@example.com")?;
+let options = SmtpProbeOptions {
+    catchall_probes: 2,
+    helo_domain: "example.com".into(),
+    ..SmtpProbeOptions::default()
+};
 
-match report.status {
-    MailboxStatus::Deliverable => println!("SMTP OK"),
-    MailboxStatus::Rejected { code, message } => println!("Rejected: {code} {message}"),
-    other => println!("Verification inconclusive: {other}"),
+let report = check_mailaddress_exists("alice@example.com", &options)?;
+
+match report.result {
+    Existence::Exists => println!("adresse acceptée"),
+    Existence::DoesNotExist => println!("n'existe pas"),
+    Existence::CatchAll => println!("catch-all probable"),
+    Existence::Indeterminate(reason) => println!("inconclu ({reason})"),
 }
 ```
 
 Depuis la CLI :
 
 ```bash
-cargo run --features with-mx -- --stdin --deliverability < emails.txt
+# résumé par adresse (option --deliverability)
+cargo run --features with-smtp-verify -- --stdin --deliverability < emails.txt
+
+# diagnostic complet
+cargo run --features with-smtp-verify -- verify-exists alice@example.com --format human
 ```
 
-Le champ `deliverability` est ajouté aux formats `json`/`ndjson` et `human`. En
-CSV, les colonnes `deliverability_status` / `deliverability_detail` synthétisent
-le résultat.
+Le champ `deliverability` est ajouté aux formats `human`/`json`/`ndjson` des
+rapports par adresse. En CSV, les colonnes `deliverability_status` /
+`deliverability_detail` condensent le verdict (`exists`, `does_not_exist`,
+`catch_all`, `indeterminate`) et la première preuve SMTP.
 
 ### Vérification SPF / DKIM / DMARC (`with-auth-records`)
 
@@ -284,3 +302,23 @@ La fonction `check_auth_records` utilise les options par défaut (pas de sélect
 ## Licence
 
 MIT ou Apache-2.0 (double licence). Voir `Cargo.toml`.
+#### Commande `verify-exists`
+
+Disponible avec `--features with-smtp-verify`, elle déclenche une sonde
+individualisée :
+
+```
+mailcheck-cli verify-exists <email>
+    --helo <nom>               Personnalise EHLO/HELO (défaut: domaine cible)
+    --from <adresse>           Envelope MAIL FROM (défaut: postmaster@domaine)
+    --require-starttls         Échec si STARTTLS n'est pas annoncé
+    --catchall-probes <N>      Nombre d'adresses aléatoires testées (0..=5)
+    --max-mx <N>               Limite de serveurs MX interrogés (défaut 3)
+    --timeout <ms>             Délai global connexion/lecture (défaut 5000)
+    --ipv6                     Autorise les adresses IPv6
+    --format <human|json>      Format de sortie (défaut human)
+```
+
+La sortie `human` récapitule le verdict, la confiance et les lignes clés du
+transcript SMTP. En `json`, l'objet sérialise directement le
+[`SmtpProbeReport`].

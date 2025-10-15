@@ -45,8 +45,8 @@ pub struct Cli {
     #[arg(long)]
     pub mx: bool,
 
-    /// teste la délivrabilité SMTP (feature `with-mx`)
-    #[cfg(feature = "with-mx")]
+    /// teste la délivrabilité SMTP (feature `with-smtp-verify`)
+    #[cfg(feature = "with-smtp-verify")]
     #[arg(long)]
     pub deliverability: bool,
 
@@ -73,6 +73,36 @@ pub enum Commands {
         #[arg(long)]
         mode: Option<String>,
         email: String,
+    },
+    #[cfg(feature = "with-smtp-verify")]
+    #[command(name = "verify-exists")]
+    VerifyExists {
+        /// adresse e-mail à tester
+        email: String,
+        /// format de sortie (human|json)
+        #[arg(long, default_value = "human")]
+        format: String,
+        /// nom utilisé pour EHLO/HELO
+        #[arg(long)]
+        helo: Option<String>,
+        /// enveloppe MAIL FROM (par défaut postmaster@domaine)
+        #[arg(long = "from")]
+        mail_from: Option<String>,
+        /// requiert STARTTLS si proposé
+        #[arg(long = "require-starttls")]
+        require_starttls: bool,
+        /// nombre d'adresses aléatoires pour détecter un catch-all
+        #[arg(long = "catchall-probes", default_value_t = 1)]
+        catchall_probes: u8,
+        /// nombre maximum d'MX interrogés
+        #[arg(long = "max-mx", default_value_t = 3)]
+        max_mx: usize,
+        /// timeout global (ms)
+        #[arg(long = "timeout", default_value_t = 5_000)]
+        timeout_ms: u64,
+        /// autorise IPv6
+        #[arg(long = "ipv6")]
+        ipv6: bool,
     },
 }
 

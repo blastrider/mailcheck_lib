@@ -1,5 +1,5 @@
 use mailcheck_lib::{
-    DeliverabilityError, MailboxStatus, MailboxVerification, NormalizedEmail,
+    Existence, NormalizedEmail, SmtpProbeOptions, SmtpProbeReport, SmtpVerifyError,
     check_mailaddress_exists,
 };
 
@@ -7,7 +7,7 @@ use mailcheck_lib::{
 #[derive(Debug, Clone)]
 pub struct DeliverabilitySummary {
     #[cfg_attr(feature = "with-serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub verification: Option<MailboxVerification>,
+    pub report: Option<SmtpProbeReport>,
     #[cfg_attr(feature = "with-serde", serde(skip_serializing_if = "Option::is_none"))]
     pub error: Option<String>,
     #[cfg_attr(feature = "with-serde", serde(skip_serializing_if = "Option::is_none"))]
@@ -15,38 +15,44 @@ pub struct DeliverabilitySummary {
 }
 
 impl DeliverabilitySummary {
-    pub fn from_verification(verification: MailboxVerification) -> Self {
+    pub fn from_report(report: SmtpProbeReport) -> Self {
         Self {
-            verification: Some(verification),
+            report: Some(report),
             error: None,
             skipped: None,
         }
     }
 
-    pub fn from_error(error: DeliverabilityError) -> Self {
-        match error {
-            DeliverabilityError::InvalidEmail { reasons } => {
-                Self::skipped(format!("invalid email: {}", reasons.join(", ")))
-            }
-            other => Self {
-                verification: None,
-                error: Some(other.to_string()),
-                skipped: None,
-            },
+    pub fn from_error(error: SmtpVerifyError) -> Self {
+        Self {
+            report: None,
+            error: Some(error.to_string()),
+            skipped: None,
         }
     }
 
     pub fn skipped(reason: impl Into<String>) -> Self {
         Self {
-            verification: None,
+            report: None,
             error: None,
             skipped: Some(reason.into()),
         }
     }
 
     pub fn human_summary(&self) -> String {
-        if let Some(verification) = &self.verification {
-            human_for_status(&verification.status)
+        if let Some(report) = &self.report {
+            match &report.result {
+                Existence::Exists => format!("Exists ({:.2})", report.confidence),
+                Existence::DoesNotExist => format!(
+                    "DoesNotExist ({:.2}) — {}",
+                    report.confidence,
+                    first_evidence(report)
+                ),
+                Existence::CatchAll => format!("CatchAll ({:.2})", report.confidence),
+                Existence::Indeterminate(reason) => {
+                    format!("Indeterminate ({:.2}) — {reason}", report.confidence)
+                }
+            }
         } else if let Some(error) = &self.error {
             format!("error: {error}")
         } else if let Some(reason) = &self.skipped {
@@ -58,8 +64,15 @@ impl DeliverabilitySummary {
 
     #[cfg(feature = "with-csv")]
     pub fn csv_fields(&self) -> (String, String) {
-        if let Some(verification) = &self.verification {
-            csv_for_status(&verification.status)
+        if let Some(report) = &self.report {
+            let status = match &report.result {
+                Existence::Exists => "exists",
+                Existence::DoesNotExist => "does_not_exist",
+                Existence::CatchAll => "catch_all",
+                Existence::Indeterminate(_) => "indeterminate",
+            };
+            let detail = format!("{:.2}|{}", report.confidence, first_evidence(report));
+            (status.to_string(), detail)
         } else if let Some(error) = &self.error {
             ("error".to_string(), error.clone())
         } else if let Some(reason) = &self.skipped {
@@ -76,12 +89,12 @@ pub fn probe(row: &NormalizedEmail) -> DeliverabilitySummary {
 
 fn probe_with<F>(row: &NormalizedEmail, check: F) -> DeliverabilitySummary
 where
-    F: Fn(&str) -> Result<MailboxVerification, DeliverabilityError>,
+    F: Fn(&str, &SmtpProbeOptions) -> Result<SmtpProbeReport, SmtpVerifyError>,
 {
     if !row.valid {
         return DeliverabilitySummary::skipped("email invalid");
     }
-    if row.local.is_empty() {
+    if row.local.trim().is_empty() {
         return DeliverabilitySummary::skipped("local part missing");
     }
 
@@ -98,53 +111,39 @@ where
     }
 
     let candidate = format!("{}@{}", row.local, domain);
-    match check(&candidate) {
-        Ok(verification) => DeliverabilitySummary::from_verification(verification),
+    let options = SmtpProbeOptions {
+        helo_domain: domain.to_string(),
+        mail_from: format!("postmaster@{domain}"),
+        catchall_probes: 1,
+        max_mx: 3,
+        ..SmtpProbeOptions::default()
+    };
+
+    match check(&candidate, &options) {
+        Ok(report) => DeliverabilitySummary::from_report(report),
         Err(error) => DeliverabilitySummary::from_error(error),
     }
 }
 
-fn human_for_status(status: &MailboxStatus) -> String {
-    match status {
-        MailboxStatus::Deliverable => "deliverable".to_string(),
-        MailboxStatus::Rejected { code, message } => {
-            format!("rejected {code}: {message}")
-        }
-        MailboxStatus::TemporaryFailure { code, message } => {
-            format!("temporary failure {code}: {message}")
-        }
-        MailboxStatus::NoMailServer => "no MX records".to_string(),
-        MailboxStatus::Unreachable => "all servers unreachable".to_string(),
-        MailboxStatus::Unverified => "verification inconclusive".to_string(),
-    }
-}
-
-#[cfg(feature = "with-csv")]
-fn csv_for_status(status: &MailboxStatus) -> (String, String) {
-    match status {
-        MailboxStatus::Deliverable => ("deliverable".to_string(), String::new()),
-        MailboxStatus::Rejected { code, message } => {
-            ("rejected".to_string(), format!("{code}:{message}"))
-        }
-        MailboxStatus::TemporaryFailure { code, message } => {
-            ("temporary_failure".to_string(), format!("{code}:{message}"))
-        }
-        MailboxStatus::NoMailServer => ("no_mx".to_string(), String::new()),
-        MailboxStatus::Unreachable => ("unreachable".to_string(), String::new()),
-        MailboxStatus::Unverified => ("unverified".to_string(), String::new()),
-    }
+fn first_evidence(report: &SmtpProbeReport) -> String {
+    report
+        .transcript
+        .iter()
+        .find(|line| line.contains("550") || line.contains("250") || line.contains("5.1.1"))
+        .cloned()
+        .unwrap_or_else(|| report.transcript.first().cloned().unwrap_or_default())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn deliverable(email: &str) -> MailboxVerification {
-        MailboxVerification {
-            email: email.to_string(),
-            ascii_domain: "example.com".to_string(),
-            status: MailboxStatus::Deliverable,
-            attempts: Vec::new(),
+    fn fake_report(existence: Existence) -> SmtpProbeReport {
+        SmtpProbeReport {
+            result: existence,
+            mx_tried: vec!["mx.example".to_string()],
+            transcript: vec!["[mx.example] S: 550 5.1.1 user unknown".to_string()],
+            confidence: 0.95,
         }
     }
 
@@ -165,32 +164,8 @@ mod tests {
             spec_notes: None,
             ascii_hint: None,
         };
-        let summary = probe_with(&normalized, |_| Ok(deliverable("bad")));
-        assert_eq!(
-            summary.human_summary(),
-            "skipped: email invalid".to_string()
-        );
-    }
-
-    #[test]
-    fn reports_deliverable() {
-        let normalized = NormalizedEmail {
-            original: "user@example.com".to_string(),
-            local: "user".to_string(),
-            domain: "example.com".to_string(),
-            ascii_domain: "example.com".to_string(),
-            mode: mailcheck_lib::ValidationMode::Strict,
-            valid: true,
-            reasons: Vec::new(),
-            spec_chars: None,
-            has_confusables: None,
-            has_diacritics: None,
-            has_mixed_scripts: None,
-            spec_notes: None,
-            ascii_hint: None,
-        };
-        let summary = probe_with(&normalized, |_| Ok(deliverable("user@example.com")));
-        assert_eq!(summary.human_summary(), "deliverable");
+        let summary = probe_with(&normalized, |_, _| Ok(fake_report(Existence::Exists)));
+        assert_eq!(summary.human_summary(), "skipped: email invalid");
     }
 
     #[test]
@@ -210,15 +185,28 @@ mod tests {
             spec_notes: None,
             ascii_hint: None,
         };
-        let summary = probe_with(&normalized, |_| {
-            Err(DeliverabilityError::InvalidEmail {
-                reasons: vec!["oops".to_string()],
-            })
-        });
-        assert!(
-            summary.human_summary().contains("invalid email"),
-            "expected invalid email, got {}",
-            summary.human_summary()
-        );
+        let summary = probe_with(&normalized, |_, _| Err(SmtpVerifyError::NoSmtpServers));
+        assert!(summary.human_summary().starts_with("error:"));
+    }
+
+    #[test]
+    fn reports_exists() {
+        let normalized = NormalizedEmail {
+            original: "user@example.com".to_string(),
+            local: "user".to_string(),
+            domain: "example.com".to_string(),
+            ascii_domain: "example.com".to_string(),
+            mode: mailcheck_lib::ValidationMode::Strict,
+            valid: true,
+            reasons: Vec::new(),
+            spec_chars: None,
+            has_confusables: None,
+            has_diacritics: None,
+            has_mixed_scripts: None,
+            spec_notes: None,
+            ascii_hint: None,
+        };
+        let summary = probe_with(&normalized, |_, _| Ok(fake_report(Existence::Exists)));
+        assert!(summary.human_summary().starts_with("Exists"));
     }
 }
